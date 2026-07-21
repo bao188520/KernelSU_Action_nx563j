@@ -1,14 +1,14 @@
 name: Build Kernel
 on:
-
   workflow_dispatch:
 
 jobs:
   build:
     name: Build Kernel by ${{ github.actor }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04    # 关键修改：从 ubuntu-latest → ubuntu-20.04
     steps:
     - uses: actions/checkout@v3
+
     - name: Setup Configuration
       run: |
         echo "KERNEL_SOURCE=$(cat config.env | grep "KERNEL_SOURCE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
@@ -20,7 +20,8 @@ jobs:
         echo "BUILD_EXTRA_COMMAND=$(cat config.env | grep "EXTRA_BUILD_COMMAND" | head -n 1 | cut -d ":" -f 2)" >> $GITHUB_ENV
         echo "USE_KERNELSU=$(cat config.env | grep "USE_KERNELSU" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
         echo "MAKE_BOOT_IMAGE=$(cat config.env | grep "MAKE_BOOT_IMAGE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "BOOT_SIGNATURE=$(cat config.env | grep "MAKE_BOOT_IMAGE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
+        # 修复BUG：原来错误读取MAKE_BOOT_IMAGE，现在读取BOOT_SIGNATURE
+        echo "BOOT_SIGNATURE=$(cat config.env | grep "BOOT_SIGNATURE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
         echo "SOURCE_BOOT_IMAGE=$(cat config.env | grep "SOURCE_BOOT_IMAGE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
 
     - name: Setup build kernel environment
@@ -67,7 +68,7 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace
         wget -O boot-source.img ${{ env.SOURCE_BOOT_IMAGE }}
         if [ -f boot-source.img ]; then
-            echo "FORMAT_MKBOOTING=$(echo `tools/unpack_bootimg.py --boot_img=boot-source.img --format mkbootimg`)" >> $GITHUB_ENV
+            echo "FORMAT_MKBOOTING=$(python3 tools/unpack_bootimg.py --boot_img=boot-source.img --format mkbootimg)" >> $GITHUB_ENV
             echo "HAVE_SOURCE_BOOT_IMAGE=true" >> $GITHUB_ENV
         else
             echo "Source boot image is empty"
@@ -93,15 +94,15 @@ jobs:
       if: env.HAVE_SOURCE_BOOT_IMAGE == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
-        tools/unpack_bootimg.py --boot_img boot-source.img
+        python3 tools/unpack_bootimg.py --boot_img boot-source.img
         cp android-kernel/out/arch/${{ env.TARGET_ARCH }}/boot/${{ env.KERNEL_FILE }} out/kernel
-        tools/mkbootimg.py ${{ env.FORMAT_MKBOOTING }} -o boot_unsign.img
+        python3 tools/mkbootimg.py ${{ env.FORMAT_MKBOOTING }} -o boot_unsign.img
         if [ -f boot_unsign.img ]; then
             echo "MAKE_BOOT_IMAGE_IS_OK=true" >> $GITHUB_ENV
         else
             echo "Boot image is empty"
         fi
-        tools/mkbootimg.py --header_version 0 --os_version 14.0.0 --os_patch_level 2023-11 --kernel out/kernel --ramdisk out/ramdisk --pagesize 0x00001000 --base 0x00000000 --kernel_offset 0x00008000 --ramdisk_offset 0x01000000 --second_offset 0x00000000 --tags_offset 0x00000100 --board '' --cmdline 'androidboot.hardware=qcom user_debug=31 msm_rtb.filter=0x37 ehci-hcd.park=3 lpm_levels.sleep_disabled=1 sched_enable_hmp=1 sched_enable_power_aware=1 service_locator.enable=1 swiotlb=2048 androidboot.usbconfigfs=true androidboot.usbcontroller=a800000.dwc3 androidboot.selinux=permissive loop.max_part=7' -o bootp_unsign.img
+        python3 tools/mkbootimg.py --header_version 0 --os_version 14.0.0 --os_patch_level 2023-11 --kernel out/kernel --ramdisk out/ramdisk --pagesize 0x00001000 --base 0x00000000 --kernel_offset 0x00008000 --ramdisk_offset 0x01000000 --second_offset 0x00000000 --tags_offset 0x00000100 --board '' --cmdline 'androidboot.hardware=qcom user_debug=31 msm_rtb.filter=0x37 ehci-hcd.park=3 lpm_levels.sleep_disabled=1 sched_enable_hmp=1 sched_enable_power_aware=1 service_locator.enable=1 swiotlb=2048 androidboot.usbconfigfs=true androidboot.usbcontroller=a800000.dwc3 androidboot.selinux=permissive loop.max_part=7' -o bootp_unsign.img
         if [ -f bootp_unsign.img ]; then
             echo "MAKE_BOOTP_IMAGE_IS_OK=true" >> $GITHUB_ENV
         else
@@ -114,7 +115,7 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace
         java -jar bootsigner/boot_signer.jar /boot boot_unsign.img bootsigner/verity.pk8 bootsigner/verity.x509.pem boot.img
         RET=$(java -jar bootsigner/boot_signer.jar -verify boot.img 2>&1)
-        if (`echo $RET | grep "VALID" >/dev/null 2>&1`);
+        if echo "$RET" | grep "VALID" >/dev/null 2>&1;
         then
             echo "Boot Signature is VALID";
             echo "BOOT_SIGNATURE_VALID=true" >> $GITHUB_ENV
@@ -122,13 +123,13 @@ jobs:
             echo "Boot Signature is not VALID";
         fi
         java -jar bootsigner/boot_signer.jar /boot bootp_unsign.img bootsigner/verity.pk8 bootsigner/verity.x509.pem boot_permissive.img
-        RET=$(java -jar bootsigner/boot_signer.jar -verify boot.img 2>&1)
-        if (`echo $RET | grep "VALID" >/dev/null 2>&1`);
+        RET=$(java -jar bootsigner/boot_signer.jar -verify boot_permissive.img 2>&1)
+        if echo "$RET" | grep "VALID" >/dev/null 2>&1;
         then
-            echo "Boot Signature is VALID";
+            echo "Boot Permissive Signature is VALID";
             echo "BOOTP_SIGNATURE_VALID=true" >> $GITHUB_ENV
         else
-            echo "Boot Signature is not VALID";
+            echo "Boot Permissive Signature is not VALID";
         fi
 
     - name: Upload boot image with permissive
@@ -139,4 +140,3 @@ jobs:
         path: |
           kernel_workspace/boot.img
           kernel_workspace/boot_permissive.img
-
