@@ -1,4 +1,9 @@
 # KernelSU Action for Nubia Z17 (nx563j)
+
+##已经在lineage-22.2-20260710-nightly-nx563j-signed版本中正常使用
+
+修改部分工作流，可以正确编译。
+
 ## Overview
 It may work well on system which based on LineageOS 20 kernel.  
 This project based on the kernel of LineageOS 20.0.<https://github.com/LineageOS/android_kernel_nubia_msm8998/tree/lineage-20>  
